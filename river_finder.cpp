@@ -264,9 +264,6 @@ std::vector<Res> findBiggestRiver(
     return result;
 }
 
-/* ================== 主程序 ================== */
-
-
 void findBiggestRiverParallelPool(
     ThreadSafeResults<Res> &globalResults,
     Generator *g,
