@@ -10,35 +10,51 @@
 #include <functional>
 #include <condition_variable>
 #include <atomic>
+#include <algorithm>
 #include <iostream>
 
 template<typename T>
 class ThreadSafeResults {
-    std::priority_queue<T> results_;
+    std::vector<T> results_;
     std::mutex mutex_{};
+
 
 public:
     void addResult(const T &res)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        results_.emplace(res);
+        results_.push_back(res);
+        clear();
     }
 
     void addResults(const std::vector<T> &newResults)
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto &result: newResults)
+
+        T new_max = *std::max_element(newResults.cbegin(), newResults.cend());
+        results_.insert(results_.end(), newResults.cbegin(), newResults.cend());
+        clear();
+    }
+
+
+    int size() const
+    {
+        return results_.size();
+    }
+
+    void clear()
+    {
+        if (results_.size() > 4000)
         {
-            results_.emplace(result);
+             std::nth_element(results_.begin(),
+                     results_.begin() + 1000,
+                     results_.end(),
+                     std::greater<T>());        // 注意：greater 使最大的排在前面
+            results_.resize(1000);
         }
     }
 
-    const T &get() const
-    {
-        return results_.top();
-    }
-
-    bool empty() const
+    [[nodiscard]] bool empty() const
     {
         return results_.empty();
     }
@@ -46,14 +62,8 @@ public:
     std::vector<T> getAllResults()
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        std::vector<T> allResults;
-        while (!results_.empty())
-        {
-            allResults.push_back(results_.top());
-            results_.pop();
-        }
-        std::cout << "addResults: " << allResults.size() << "\n";
-        return allResults;
+        std::ranges::sort(results_,std::greater<T>());
+        return results_;
     }
 };
 
@@ -111,8 +121,6 @@ public:
                 worker.join();
             }
         }
-
-        std::cout << "ThreadPool destroyed" << std::endl;
     }
 };
 #endif //CUBIOMES_THREAD_H

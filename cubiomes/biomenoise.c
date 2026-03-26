@@ -18,6 +18,7 @@
 //==============================================================================
 
 
+
 void initSurfaceNoise(SurfaceNoise *sn, int dim, uint64_t seed)
 {
     uint64_t s;
@@ -1137,6 +1138,7 @@ void initBiomeNoise(BiomeNoise *bn, int mc)
 }
 
 
+
 /// Biome sampler for MC 1.18
 int sampleBiomeNoiseOnRiver(const BiomeNoise *bn, int64_t *np, int x, int y, int z,
     uint64_t *dat, uint32_t sample_flags)
@@ -1178,14 +1180,9 @@ int sampleBiomeNoiseOnRiver(const BiomeNoise *bn, int64_t *np, int x, int y, int
         d = 1.0 - (y * 4) / 128.0 - 83.0/160.0 + off;
     }
 
-    if (d >0 && d < 1)
-    {
-        if (0.8 < c && c <  1.0) return  0;
-        if (0.7 < h && h < 1.0) return 0;
-    }
-    return river;
+    //下面这个会在y比较高时产生误判。
 
-    //h = sampleDoublePerlin(&bn->climate[NP_HUMIDITY], px, 0, pz);
+    h = sampleDoublePerlin(&bn->climate[NP_HUMIDITY], px, 0, pz);
 
     int64_t l_np[6];
     int64_t *p_np = np ? np : l_np;
@@ -1235,7 +1232,7 @@ int sampleBiomeNoise(const BiomeNoise *bn, int64_t *np, int x, int y, int z,
         //double py = y + sampleDoublePerlin(&bn->shift, y, z, x) * 4.0;
         d = 1.0 - (y * 4) / 128.0 - 83.0/160.0 + off;
     }
-    //h = sampleDoublePerlin(&bn->climate[NP_HUMIDITY], px, 0, pz);
+    h = sampleDoublePerlin(&bn->climate[NP_HUMIDITY], px, 0, pz);
 
     int64_t l_np[6];
     int64_t *p_np = np ? np : l_np;

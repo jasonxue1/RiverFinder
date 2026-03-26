@@ -45,7 +45,10 @@ set(SOURCES
 		cubiomes/noise.c
 		cubiomes/util.c
 		cubiomes/quadbase.c
-		river_finder.cpp
+		#river_finder.cpp
+		riverFinderLib.cpp
+		riverFinderLib.h
 )
 
-add_executable(riverFinder ${SOURCES})
+add_library(riverFinderLib SHARED ${SOURCES} ${HEADERS})
+target_compile_definitions(riverFinderLib PRIVATE RIVERFINDER_EXPORTS)

@@ -13,31 +13,7 @@
 
 /* ================== 河流判定 ================== */
 
-template<typename Func>
-void measure_time(Func func, const std::string &name = "Function")
-{
-    auto start = std::chrono::high_resolution_clock::now();
 
-    // 执行传入的函数
-    func();
-
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-
-    std::cout << name << " took: "
-            << duration.count() << " microseconds ("
-            << duration.count() / 1000.0 << " ms)" << std::endl;
-}
-
-static inline int isRiverBiome(int id)
-{
-    return (id == river) * 0 + (id == dripstone_caves) * 10;
-}
-
-static inline int isDripstone_caves(int id)
-{
-    return (id == dripstone_caves);
-}
 
 static inline int value(int id)
 {
@@ -46,7 +22,6 @@ static inline int value(int id)
 struct Point {
     int x = 0;
     int y = 0;
-
     std::strong_ordering operator<=>(const Point &) const = default;
 };
 
@@ -56,11 +31,10 @@ struct Res {
     Point point;
     int area = 0;
 
-    bool operator<(const Res &other) const noexcept
+    std::strong_ordering operator<=>(const Res &other) const noexcept
     {
-        // 首先按面积降序，面积相同时按坐标排序
-        if (area != other.area) return area < other.area;
-        return true;
+        if (auto cmp = area <=>other.area; cmp != 0) return cmp;
+        return point <=> other.point;
     }
 
     Res() = default;
@@ -70,9 +44,17 @@ struct Res {
     };
 };
 
+struct Progress {
+    std::atomic_int  current = 0;
+    std::atomic_int  total = 0;
+    std::atomic_int  chunkInRunning;
+    std::atomic_int  phase1 = 0;
+    std::atomic_bool try_pause = false;
+    std::atomic_bool try_stop = false;
+};
 
 
-template<int  scale>
+template<int scale>
 std::vector<Res> findBiggestRiver(
     Generator *g,
     int startX, int startZ,
@@ -276,21 +258,15 @@ void findBiggestRiverParallelPool(
     int sz,
     int y,
     int minArea,
+    Progress * progress,
     int numThreads = std::thread::hardware_concurrency()
 )
 {
-    //numThreads = 1;
-
     ThreadPool pool(numThreads);
-
     const int chunkSize = 4096 * 2;
     const int overlap = 256;
     std::atomic<int> completedChunks{0};
     int totalChunks = 0;
-
-    auto startTime = std::chrono::high_resolution_clock::now();
-
-    
     for (int x = 0; x < sx; x += chunkSize - overlap)
     {
         for (int z = 0; z < sz; z += chunkSize - overlap)
@@ -301,9 +277,28 @@ void findBiggestRiverParallelPool(
             if (currentSx >= 256 && currentSz >= 256)
             {
                 totalChunks++;
+                if (progress) progress -> total++;
 
-                
                 pool.enqueue([&, x, z, currentSx, currentSz]() {
+
+                    if (progress)
+                    {
+                        if (progress->try_stop)
+                        {
+                            return;
+                        }
+
+                        while (progress->try_pause)
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                            if (progress->try_stop)
+                            {
+                                return;
+                            }
+                        }
+                        progress->chunkInRunning+=1;
+                    }
+
                     Generator localG = *g;
                     auto blockResultsX16 = findBiggestRiver<16>(
                         &localG,
@@ -313,12 +308,10 @@ void findBiggestRiverParallelPool(
                         currentSz,
                         y,
                         minArea,
-                        0.8
+                        0.85
                     );
-
                     int bx = currentSx / 256 + 2;
                     int bz = currentSz / 256 + 2;
-
                     std::vector<Res> flags(bx * bz);
                     for (const auto &it: blockResultsX16)
                     {
@@ -333,20 +326,14 @@ void findBiggestRiverParallelPool(
                             flags[ x2+ bx*z2] = it;
                         }
                     }
-
                     std::vector<Res> pqX16;
                     pqX16.reserve(flags.size());
-
                     for (auto &kv: flags)
                         if (kv.area > 0) pqX16.push_back(kv);
-
                     std::ranges::sort(pqX16, [](const Res& a, const Res& b) { return a.area > b.area; });
-
                     std::unordered_map<uint64_t, Res> blockResultsX4;
                     blockResultsX4.reserve(16);
-
                     int max = 0;
-
                     for (auto &res: pqX16)
                     {
                         auto subResults = findBiggestRiver<4>(
@@ -384,14 +371,14 @@ void findBiggestRiverParallelPool(
 
                     std::vector<Res> filteredResults;
                     filteredResults.reserve(blockResultsX4.size());
-
                     for (const auto &result: blockResultsX4 | std::views::values)
                     {
                         int relX = result.point.x - (startX + x);
                         int relZ = result.point.y - (startZ + z);
 
                         if (relX > overlap / 2 && relX < currentSx - overlap / 2 &&
-                            relZ > overlap / 2 && relZ < currentSz - overlap / 2)
+                            relZ > overlap / 2 && relZ < currentSz - overlap / 2
+                            && result.area > 0)
                         {
                             filteredResults.push_back(result);
                         }
@@ -399,49 +386,26 @@ void findBiggestRiverParallelPool(
                     std::ranges::sort(filteredResults, [](const Res& a, const Res& b) { return a.area > b.area; });
                     if (!filteredResults.empty())
                     {
-                        if (!globalResults.empty())
-                        {
-                            if (globalResults.get().area < filteredResults[0].area)
-                            {
-                                std::cout << "New Max Found: [" << filteredResults[0].point.x << ", " << filteredResults[0].point.y
-                                        << "] area: " << filteredResults[0].area << "\n";
-                            }
-                        }
+
                         globalResults.addResults(filteredResults);
                     }
-
                     int completed = completedChunks.fetch_add(1) + 1;
-
-
-
-                    if (completed % 500 == 0)
-                    {
-                        auto currentTime = std::chrono::high_resolution_clock::now();
-                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            currentTime - startTime).count();
-
-                        double speed = static_cast<double>(completed) / elapsed * 1000;
-
-                        std::cout << "Progress: " << completed << "/" << totalChunks
-                                << " (" << int(completed * 100.0 / totalChunks)
-                                << "%) - " << speed << " chunks/sec\n";
-                    }
+                    if (progress) progress->current = completed;
+                    progress->chunkInRunning-=1;
                 });
             }
         }
     }
 
-    std::cout << "Submitted " << totalChunks << " chunks to thread pool\n";
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        endTime - startTime
-    );
-    std::cout << "Thread pool processing took: " << duration.count()
-            << "ms for " << totalChunks << " chunks\n";
+    if (progress)
+    {
+        progress -> total = totalChunks;
+    }
+
 }
 
 
-int main(int argc, char **argv)
+int main2(int argc, char **argv)
 {
     int d;
     int64_t seed = -8180004378910677489;
@@ -464,8 +428,8 @@ int main(int argc, char **argv)
     int zRange = 2*d;
 
 
-    int minArea = 40000;
-    const char *outFile = "out1.txt";
+    int minArea = 30000;
+
     int outLimit = 1000;
 
 
@@ -476,7 +440,7 @@ int main(int argc, char **argv)
 
     ThreadSafeResults<Res> globalResults;
 
-    findBiggestRiverParallelPool(globalResults, &g, startX, startZ, xRange, zRange,y, minArea);
+    findBiggestRiverParallelPool(globalResults, &g, startX, startZ, xRange, zRange,y, minArea,nullptr);
 
     auto res = globalResults.getAllResults();
 
@@ -487,7 +451,7 @@ int main(int argc, char **argv)
     for (const auto& it: res)
     {
         auto temp = findBiggestRiver<1>(&g,it.point.x - 128 -32,it.point.y - 128 - 32,256+64,256+64, y, 1,1);
-        if (!temp.empty() && temp[0].area > max * 0.90)
+        if (!temp.empty() && temp[0].area > max * 0.85)
         {
             finallyResults.push_back(temp[0]);
             if (temp[0].area > max)
@@ -502,7 +466,18 @@ int main(int argc, char **argv)
 
     std::ranges::sort(finallyResults, [](const Res& a, const Res& b) { return a.area > b.area; });
 
-    FILE *fp = fopen(outFile, "w");
+
+    std::time_t t = std::time(nullptr);
+    std::tm* now = std::localtime(&t);
+
+    std::ostringstream oss;
+    oss << "river_finder_result_"
+        << std::put_time(now, "%Y%m%d_%H%M%S")
+        << ".txt";
+
+    std::string outFile = oss.str();
+
+    FILE *fp = fopen(outFile.c_str(), "w");
     if (fp)
     {
         fprintf(fp, "River Analysis Results (Seed: %lld)\n", (long long) seed);
@@ -534,5 +509,7 @@ int main(int argc, char **argv)
         fclose(fp);
         std::cout << "\nResults saved to: " << outFile << std::endl;
     }
+
+    std::cin.get();
     return 0;
 }
