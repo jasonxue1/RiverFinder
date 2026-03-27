@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.9)
 project(riverFinder)
+option(ENABLE_CUDA_MODE "Enable CUDA mode selection (runtime mode can select cuda)" OFF)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -48,4 +49,17 @@ set(SOURCES
 		river_finder.cpp
 )
 
+if(ENABLE_CUDA_MODE)
+	enable_language(CUDA)
+	list(APPEND SOURCES cuda_accel.cu)
+endif()
+
 add_executable(riverFinder ${SOURCES})
+
+if(ENABLE_CUDA_MODE)
+    target_compile_definitions(riverFinder PRIVATE RIVERFINDER_ENABLE_CUDA)
+	set_target_properties(riverFinder PROPERTIES CUDA_STANDARD 17 CUDA_STANDARD_REQUIRED ON)
+    target_compile_options(riverFinder PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false --prec-div=true --prec-sqrt=true>
+    )
+endif()

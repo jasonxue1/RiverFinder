@@ -12,3 +12,8 @@ a.out
 
 /.vs/
 /out/
+CMakeFiles
+build
+*.swp
+build-cpu
+build-cuda
